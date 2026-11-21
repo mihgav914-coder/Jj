@@ -1,6 +1,8 @@
 import SceneKit
 import SceneKit.ModelIO
+#if canImport(GLTFKit2)
 import GLTFKit2
+#endif
 
 enum ModelError: LocalizedError {
     case noModel(String), failed
@@ -44,7 +46,8 @@ enum ModelLoader {
     }
 
     private static func loadGLTF(_ url: URL) async throws -> SCNScene {
-        try await withCheckedThrowingContinuation { cont in
+        #if canImport(GLTFKit2)
+        return try await withCheckedThrowingContinuation { cont in
             GLTFAsset.load(with: url, options: [:]) { _, status, asset, error, _ in
                 if status == .complete {
                     if let asset {
@@ -55,6 +58,9 @@ enum ModelLoader {
                 }
             }
         }
+        #else
+        throw ModelError.noModel(url.pathExtension.lowercased())
+        #endif
     }
 
     // Масштабуємо до ~0.5 м, ставимо центр основи в (0,0,0)
