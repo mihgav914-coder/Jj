@@ -1,0 +1,35 @@
+name: ARViewer
+options:
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  GLTFKit2:
+    url: https://github.com/warrenm/GLTFKit2
+    branch: main
+targets:
+  ARViewer:
+    type: application
+    platform: iOS
+    sources:
+      - path: .
+        includes: ["*.swift"]
+    dependencies:
+      - package: GLTFKit2
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.arviewer
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGNING_ALLOWED: "NO"
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: AR 3D
+        UILaunchScreen: {}
+        NSCameraUsageDescription: Камера потрібна, щоб показати 3D-модель у доповненій реальності
+        UIRequiredDeviceCapabilities: [arkit]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: 3D Model
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.data]
