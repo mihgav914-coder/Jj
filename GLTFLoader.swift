@@ -46,6 +46,17 @@ final class GLTFLoader {
 
     private init(url: URL) { baseURL = url.deletingLastPathComponent() }
 
+    // glTF: початок координат текстури — зверху зліва, SceneKit — знизу зліва, тому перевертаємо через contentsTransform
+    static let flip = SCNMatrix4Mult(SCNMatrix4MakeScale(1, -1, 1), SCNMatrix4MakeTranslation(0, 1, 0))
+    static func setTex(_ p: SCNMaterialProperty, _ img: UIImage) {
+        p.contents = img
+        p.wrapS = .repeat
+        p.wrapT = .repeat
+        p.mipFilter = .linear
+        p.maxAnisotropy = 8
+        p.contentsTransform = flip
+    }
+
     static func load(_ url: URL) throws -> SCNScene {
         let l = GLTFLoader(url: url)
         try l.parse(url)
@@ -215,7 +226,7 @@ final class GLTFLoader {
             if let ti = attrs["TEXCOORD_0"] {
                 let tf = try floats(ti)
                 var ts: [CGPoint] = []
-                for i in 0..<(tf.count / 2) { ts.append(CGPoint(x: CGFloat(tf[2 * i]), y: CGFloat(1 - tf[2 * i + 1]))) }
+                for i in 0..<(tf.count / 2) { ts.append(CGPoint(x: CGFloat(tf[2 * i]), y: CGFloat(tf[2 * i + 1]))) }
                 if ts.count == vcount { sources.append(SCNGeometrySource(textureCoordinates: ts)) }
             }
             var idx: [UInt32]
@@ -268,17 +279,17 @@ final class GLTFLoader {
                 if f[3] < 1 { m.transparency = CGFloat(f[3]) }
             }
             if let t = pbr["baseColorTexture"] as? [String: Any], let ti = t["index"] as? Int, let img = image(ti) {
-                m.diffuse.contents = img
+                GLTFLoader.setTex(m.diffuse, img)
             }
-            // без HDR-середовища металеві поверхні виглядають чорними — обмежуємо
-            m.metalness.contents = min(pbr["metallicFactor"] as? Double ?? 0.0, 0.2)
+            // металеві поверхні без повного HDR-середовища темніють — трохи обмежуємо
+            m.metalness.contents = min(pbr["metallicFactor"] as? Double ?? 0.0, 0.6)
             m.roughness.contents = pbr["roughnessFactor"] as? Double ?? 0.8
         }
         if let t = d["normalTexture"] as? [String: Any], let ti = t["index"] as? Int, let img = image(ti) {
-            m.normal.contents = img
+            GLTFLoader.setTex(m.normal, img)
         }
         if let t = d["emissiveTexture"] as? [String: Any], let ti = t["index"] as? Int, let img = image(ti) {
-            m.emission.contents = img
+            GLTFLoader.setTex(m.emission, img)
         }
         return m
     }

@@ -13,12 +13,14 @@ enum ModelError: LocalizedError {
     }
 }
 
+struct Loaded { let node: SCNNode; let name: String; let dir: URL; let file: String }
+
 enum ModelLoader {
     static let supported = ["glb", "gltf", "usdz", "usd", "usda", "usdc", "obj", "stl", "ply", "dae", "scn", "abc"]
     private static func rank(_ u: URL) -> Int { supported.firstIndex(of: u.pathExtension.lowercased()) ?? supported.count }
 
     // Можна вибрати кілька файлів одразу (.gltf + .bin + текстури, .obj + .mtl + текстури)
-    static func load(_ urls: [URL]) async throws -> SCNNode {
+    static func load(_ urls: [URL]) async throws -> Loaded {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         var copied: [URL] = []
@@ -32,19 +34,24 @@ enum ModelLoader {
         guard let file = copied.min(by: { rank($0) < rank($1) }), rank(file) < supported.count else {
             throw ModelError.noModel(copied.first?.pathExtension.lowercased() ?? "")
         }
+        let node = try read(file)
+        return Loaded(node: node, name: file.deletingPathExtension().lastPathComponent, dir: dir, file: file.lastPathComponent)
+    }
+
+    static func read(_ file: URL) throws -> SCNNode {
         let scene: SCNScene
         if ["glb", "gltf"].contains(file.pathExtension.lowercased()) {
             scene = try GLTFLoader.load(file)
         } else {
             scene = try SCNScene(url: file, options: nil)
         }
-        return normalize(scene)
+        let content = SCNNode()
+        for c in scene.rootNode.childNodes { content.addChildNode(c) }
+        return wrap(content)
     }
 
     // Масштабуємо до ~0.5 м, ставимо центр основи в (0,0,0)
-    private static func normalize(_ scene: SCNScene) -> SCNNode {
-        let content = SCNNode()
-        for c in scene.rootNode.childNodes { content.addChildNode(c) }
+    static func wrap(_ content: SCNNode) -> SCNNode {
         let (mn, mx) = content.boundingBox
         let maxDim = max(mx.x - mn.x, max(mx.y - mn.y, mx.z - mn.z))
         if maxDim > 0 {

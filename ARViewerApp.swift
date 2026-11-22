@@ -10,47 +10,31 @@ struct ARViewerApp: App {
 }
 
 struct ContentView: View {
+    @StateObject private var store = LibraryStore()
     @State private var model: SCNNode?
+    @State private var modelName = ""
     @State private var ar = true
     @State private var showPicker = false
+    @State private var showLibrary = false
     @State private var loading = false
     @State private var error: String?
-    @State private var resetTick = 0
     @State private var status: String?
+    @State private var resetTick = 0
+    @State private var paintMode = false
+    @State private var color = Color.red
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if ar { ARSceneView(model: model, resetTick: resetTick).ignoresSafeArea() }
-            else { ViewerSceneView(model: model).ignoresSafeArea() }
-
+            if ar {
+                ARSceneView(model: model, resetTick: resetTick, paintMode: paintMode, paintColor: UIColor(color)).ignoresSafeArea()
+            } else {
+                ViewerSceneView(model: model, paintMode: paintMode, paintColor: UIColor(color)).ignoresSafeArea()
+            }
             VStack {
-                HStack {
-                    Picker("", selection: $ar) {
-                        Text("AR").tag(true)
-                        Text("3D").tag(false)
-                    }.pickerStyle(.segmented).frame(width: 140)
-                    Spacer()
-                    if model != nil && ar {
-                        Button { resetTick += 1 } label: { Image(systemName: "arrow.counterclockwise") }
-                            .buttonStyle(.bordered)
-                    }
-                    Button { showPicker = true } label: { Label("Відкрити", systemImage: "folder") }
-                        .buttonStyle(.borderedProminent)
-                }.padding()
+                topBar
                 Spacer()
-                VStack(spacing: 8) {
-                    if loading { ProgressView("Завантаження моделі…") }
-                    if let status { Text(status).foregroundStyle(.green) }
-                    if model == nil && !loading {
-                        Text("Відкрий 3D-модель: GLB, GLTF, USDZ, OBJ, STL, PLY, DAE, SCN, ABC")
-                    } else if ar {
-                        Text("Тягни — перемістити · два пальці: обертати й масштабувати")
-                    }
-                }
-                .font(.footnote).multilineTextAlignment(.center)
-                .padding(12).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 12))
-                .padding()
+                bottomBar
             }
         }
         .sheet(isPresented: $showPicker) {
@@ -59,20 +43,112 @@ struct ContentView: View {
                 Task { await open(urls) }
             }.ignoresSafeArea()
         }
-        .alert("Не вдалося відкрити", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+        .sheet(isPresented: $showLibrary) {
+            LibraryView(store: store, onBuiltin: { openBuiltin($0) }, onItem: { openItem($0) })
+        }
+        .alert("Помилка", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(error ?? "") }
         .onOpenURL { u in Task { await open([u]) } }
     }
 
-    func open(_ urls: [URL]) async {
+    var topBar: some View {
+        HStack {
+            Picker("", selection: $ar) {
+                Text("AR").tag(true)
+                Text("3D").tag(false)
+            }.pickerStyle(.segmented).frame(width: 140)
+            Spacer()
+            if model != nil && ar {
+                Button { resetTick += 1 } label: { Image(systemName: "arrow.counterclockwise") }.buttonStyle(.bordered)
+            }
+            Button { showLibrary = true } label: { Image(systemName: "square.grid.2x2") }.buttonStyle(.bordered)
+            Button { showPicker = true } label: { Label("Відкрити", systemImage: "folder") }.buttonStyle(.borderedProminent)
+        }.padding()
+    }
+
+    var bottomBar: some View {
+        VStack(spacing: 10) {
+            VStack(spacing: 6) {
+                if loading { ProgressView("Завантаження моделі…") }
+                if let status { Text(status).foregroundStyle(.green) }
+                if model == nil && !loading {
+                    Text("Відкрий модель (GLB, GLTF, USDZ, OBJ, STL…) або вибери фігуру в бібліотеці")
+                } else if paintMode {
+                    Text("Торкнись частини моделі, щоб зафарбувати її")
+                } else if ar {
+                    Text("Тягни — перемістити · два пальці: обертати й масштабувати")
+                }
+            }
+            .font(.footnote).multilineTextAlignment(.center)
+            .padding(10).background(.ultraThinMaterial).clipShape(RoundedRectangle(cornerRadius: 12))
+
+            if model != nil {
+                HStack(spacing: 18) {
+                    Button { paintMode.toggle() } label: {
+                        Image(systemName: "paintbrush.pointed.fill").foregroundStyle(paintMode ? Color.yellow : Color.white)
+                    }
+                    ColorPicker("", selection: $color).labelsHidden()
+                    Button { if let model { Painter.paintAll(model, UIColor(color)) } } label: { Image(systemName: "drop.fill") }
+                    Button { Painter.reset() } label: { Image(systemName: "arrow.uturn.backward") }
+                    Button { if let model { Painter.flipTextures(model) } } label: { Image(systemName: "arrow.up.arrow.down") }
+                    Button { saveColored() } label: { Image(systemName: "square.and.arrow.down") }
+                }
+                .font(.title3).padding(.horizontal, 18).padding(.vertical, 10)
+                .background(.ultraThinMaterial).clipShape(Capsule())
+            }
+        }.padding()
+    }
+
+    @MainActor func open(_ urls: [URL]) async {
         loading = true
         error = nil
-        defer { loading = false }
         status = nil
+        defer { loading = false }
         do {
-            model = try await ModelLoader.load(urls)
-            status = "Завантажено: " + urls.map { $0.lastPathComponent }.joined(separator: ", ")
+            let l = try await ModelLoader.load(urls)
+            Painter.forget()
+            model = l.node
+            modelName = l.name
+            paintMode = false
+            try? store.add(name: l.name, stagedDir: l.dir, mainFile: l.file)
+            status = "Завантажено: \(l.name)"
+        } catch { self.error = error.localizedDescription }
+    }
+
+    @MainActor func openItem(_ it: LibItem) {
+        do {
+            model = try ModelLoader.read(store.fileURL(it))
+            Painter.forget()
+            modelName = it.name
+            paintMode = false
+            status = "Відкрито: \(it.name)"
+        } catch { self.error = error.localizedDescription }
+    }
+
+    @MainActor func openBuiltin(_ b: Builtin) {
+        Painter.forget()
+        model = Builtins.node(b)
+        modelName = b.name
+        paintMode = false
+        status = b.name
+    }
+
+    // Зберегти розфарбовану модель у бібліотеку (USDZ)
+    @MainActor func saveColored() {
+        guard let model else { return }
+        let scene = SCNScene()
+        scene.rootNode.addChildNode(model.clone())
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("model.usdz")
+            guard scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) else {
+                error = "Не вдалося експортувати модель у USDZ."
+                return
+            }
+            try store.add(name: modelName + " (розфарбована)", stagedDir: dir, mainFile: "model.usdz")
+            status = "Збережено в бібліотеку"
         } catch { self.error = error.localizedDescription }
     }
 }

@@ -2,12 +2,29 @@ import SwiftUI
 import SceneKit
 import ARKit
 
+// М'яке студійне освітлення для режиму 3D
+enum Env {
+    static let image: UIImage = {
+        let size = CGSize(width: 512, height: 256)
+        return UIGraphicsImageRenderer(size: size).image { ctx in
+            let cols = [UIColor(red: 0.96, green: 0.97, blue: 1.0, alpha: 1).cgColor,
+                        UIColor(red: 0.80, green: 0.80, blue: 0.82, alpha: 1).cgColor,
+                        UIColor(red: 0.28, green: 0.28, blue: 0.30, alpha: 1).cgColor] as CFArray
+            if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: cols, locations: [0, 0.5, 1]) {
+                ctx.cgContext.drawLinearGradient(g, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
+            }
+        }
+    }()
+}
+
 // MARK: AR
 final class ARCoordinator: NSObject, UIGestureRecognizerDelegate {
     weak var view: ARSCNView?
     var source: SCNNode?
     var node: SCNNode?
     var lastTick = 0
+    var paintMode = false
+    var paintColor = UIColor.red
 
     func setModel(_ n: SCNNode?) {
         guard n !== source else { return }
@@ -47,8 +64,16 @@ final class ARCoordinator: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
-    @objc func tap(_ g: UITapGestureRecognizer) { place(at: g.location(in: view)) }
+    @objc func tap(_ g: UITapGestureRecognizer) {
+        let p = g.location(in: view)
+        if paintMode {
+            if let r = view?.hitTest(p, options: nil).first { Painter.paint(r, paintColor) }
+        } else {
+            place(at: p)
+        }
+    }
     @objc func pan(_ g: UIPanGestureRecognizer) {
+        guard !paintMode else { return }
         if g.state == .began || g.state == .changed { place(at: g.location(in: view)) }
     }
     @objc func pinch(_ g: UIPinchGestureRecognizer) {
@@ -68,6 +93,8 @@ final class ARCoordinator: NSObject, UIGestureRecognizerDelegate {
 struct ARSceneView: UIViewRepresentable {
     let model: SCNNode?
     let resetTick: Int
+    let paintMode: Bool
+    let paintColor: UIColor
 
     func makeCoordinator() -> ARCoordinator { ARCoordinator() }
 
@@ -75,6 +102,8 @@ struct ARSceneView: UIViewRepresentable {
         let v = ARSCNView()
         v.autoenablesDefaultLighting = true
         v.automaticallyUpdatesLighting = true
+        v.antialiasingMode = .multisampling4X
+        v.isJitteringEnabled = true
         let cfg = ARWorldTrackingConfiguration()
         cfg.planeDetection = [.horizontal, .vertical]
         cfg.environmentTexturing = .automatic
@@ -96,6 +125,8 @@ struct ARSceneView: UIViewRepresentable {
 
     func updateUIView(_ v: ARSCNView, context: Context) {
         let c = context.coordinator
+        c.paintMode = paintMode
+        c.paintColor = paintColor
         c.setModel(model)
         if c.lastTick != resetTick { c.lastTick = resetTick; c.reset() }
     }
@@ -106,16 +137,32 @@ struct ARSceneView: UIViewRepresentable {
 // MARK: 3D-перегляд (орбіта, зум)
 struct ViewerSceneView: UIViewRepresentable {
     let model: SCNNode?
-    final class Box { var source: SCNNode? }
+    let paintMode: Bool
+    let paintColor: UIColor
+
+    final class Box: NSObject {
+        var source: SCNNode?
+        var paintMode = false
+        var paintColor = UIColor.red
+        weak var view: SCNView?
+        @objc func tap(_ g: UITapGestureRecognizer) {
+            guard paintMode, let v = view,
+                  let r = v.hitTest(g.location(in: v), options: nil).first else { return }
+            Painter.paint(r, paintColor)
+        }
+    }
     func makeCoordinator() -> Box { Box() }
 
     func makeUIView(context: Context) -> SCNView {
         let v = SCNView()
         let scene = SCNScene()
+        scene.lightingEnvironment.contents = Env.image
+        scene.lightingEnvironment.intensity = 1.2
         v.scene = scene
         v.allowsCameraControl = true
         v.autoenablesDefaultLighting = true
         v.antialiasingMode = .multisampling4X
+        v.isJitteringEnabled = true
         v.backgroundColor = UIColor(white: 0.08, alpha: 1)
         let cam = SCNNode()
         cam.camera = SCNCamera()
@@ -126,12 +173,18 @@ struct ViewerSceneView: UIViewRepresentable {
         v.pointOfView = cam
         v.defaultCameraController.target = SCNVector3(0, 0.25, 0)
         v.defaultCameraController.interactionMode = .orbitTurntable
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Box.tap(_:)))
+        v.addGestureRecognizer(tap)
+        context.coordinator.view = v
         return v
     }
 
     func updateUIView(_ v: SCNView, context: Context) {
-        guard model !== context.coordinator.source else { return }
-        context.coordinator.source = model
+        let b = context.coordinator
+        b.paintMode = paintMode
+        b.paintColor = paintColor
+        guard model !== b.source else { return }
+        b.source = model
         v.scene?.rootNode.childNode(withName: "model", recursively: false)?.removeFromParentNode()
         if let m = model {
             let c = m.clone()
