@@ -1,8 +1,5 @@
 import SceneKit
 import SceneKit.ModelIO
-#if canImport(GLTFKit2)
-import GLTFKit2
-#endif
 
 enum ModelError: LocalizedError {
     case noModel(String), failed
@@ -17,11 +14,10 @@ enum ModelError: LocalizedError {
 }
 
 enum ModelLoader {
-    // GLB/GLTF — через GLTFKit2; решта — SceneKit/ModelIO
     static let supported = ["glb", "gltf", "usdz", "usd", "usda", "usdc", "obj", "stl", "ply", "dae", "scn", "abc"]
     private static func rank(_ u: URL) -> Int { supported.firstIndex(of: u.pathExtension.lowercased()) ?? supported.count }
 
-    // Можна вибрати кілька файлів одразу (напр. .obj + .mtl + текстури)
+    // Можна вибрати кілька файлів одразу (.gltf + .bin + текстури, .obj + .mtl + текстури)
     static func load(_ urls: [URL]) async throws -> SCNNode {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -38,29 +34,11 @@ enum ModelLoader {
         }
         let scene: SCNScene
         if ["glb", "gltf"].contains(file.pathExtension.lowercased()) {
-            scene = try await loadGLTF(file)
+            scene = try GLTFLoader.load(file)
         } else {
             scene = try SCNScene(url: file, options: nil)
         }
         return normalize(scene)
-    }
-
-    private static func loadGLTF(_ url: URL) async throws -> SCNScene {
-        #if canImport(GLTFKit2)
-        return try await withCheckedThrowingContinuation { cont in
-            GLTFAsset.load(with: url, options: [:]) { _, status, asset, error, _ in
-                if status == .complete {
-                    if let asset {
-                        cont.resume(returning: GLTFSCNSceneSource(asset: asset).defaultScene ?? SCNScene())
-                    } else { cont.resume(throwing: ModelError.failed) }
-                } else if let error {
-                    cont.resume(throwing: error)
-                }
-            }
-        }
-        #else
-        throw ModelError.noModel(url.pathExtension.lowercased())
-        #endif
     }
 
     // Масштабуємо до ~0.5 м, ставимо центр основи в (0,0,0)
